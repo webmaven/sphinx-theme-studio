@@ -1,0 +1,5 @@
+{
+  "name": "Sphinx Theme Studio",
+  "description": "A browser-based editor for creating and customizing Sphinx documentation themes. Uses Pyodide to run a lightweight Sphinx-compatible build process directly in your browser with real-time preview and AI-assisted styling.",
+  "requestFramePermissions": []
+}
