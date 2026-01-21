@@ -23,7 +23,7 @@ export const generateThemeStyles = async (prompt: string, currentCss: string, se
   try {
     if (settings.provider === 'gemini') {
         const apiKey = process.env.API_KEY;
-        if (!apiKey) throw new Error("System API Key not found");
+        if (!apiKey) throw new Error("API Key not found. Please select a Google AI Studio key in settings.");
         
         const ai = new GoogleGenAI({ apiKey });
         const response = await ai.models.generateContent({

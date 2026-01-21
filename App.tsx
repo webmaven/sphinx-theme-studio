@@ -35,6 +35,17 @@ import { INITIAL_CSS, INITIAL_HTML, INITIAL_RST, INITIAL_CONF, THEME_GALLERY } f
 const STORAGE_KEY_FILES = 'sphinx_studio_files';
 const STORAGE_KEY_AI = 'sphinx_studio_ai';
 
+declare global {
+  interface AIStudio {
+    hasSelectedApiKey(): Promise<boolean>;
+    openSelectKey(): Promise<void>;
+  }
+
+  interface Window {
+    aistudio?: AIStudio;
+  }
+}
+
 function App() {
   // Application State
   const [files, setFiles] = useState<ThemeFiles>({
@@ -74,6 +85,7 @@ function App() {
       openAiKey: '',
       anthropicKey: ''
   });
+  const [isGeminiKeySelected, setIsGeminiKeySelected] = useState(false);
 
   // Session Restore State
   const [hasSavedSession, setHasSavedSession] = useState(false);
@@ -121,6 +133,15 @@ function App() {
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, []);
 
+  // Check Gemini Key Status
+  useEffect(() => {
+      if (window.aistudio) {
+          window.aistudio.hasSelectedApiKey().then(setIsGeminiKeySelected);
+      } else {
+          setIsGeminiKeySelected(!!process.env.API_KEY);
+      }
+  }, [aiSettings.provider, showAiSettings]);
+
   // Auto-save logic
   useEffect(() => {
     const timer = setTimeout(() => {
@@ -129,18 +150,6 @@ function App() {
     }, 1000);
     return () => clearTimeout(timer);
   }, [files, aiSettings]);
-
-  // Warn on close if unsaved? 
-  // Since we auto-save to localStorage, we don't necessarily need to block unload,
-  // but it's good practice in editors to ensure the write happened.
-  useEffect(() => {
-      const handleBeforeUnload = (e: BeforeUnloadEvent) => {
-          // Only if we have pending changes that might not have hit LS yet? 
-          // Simplest is to just rely on the auto-save interval being fast enough.
-      };
-      window.addEventListener('beforeunload', handleBeforeUnload);
-      return () => window.removeEventListener('beforeunload', handleBeforeUnload);
-  }, []);
 
   const restoreSession = () => {
       const saved = localStorage.getItem(STORAGE_KEY_FILES);
@@ -201,14 +210,26 @@ function App() {
   const handleAiGenerate = async () => {
     if (!aiPrompt.trim()) return;
 
-    // First use check: if provider is not gemini and no key, OR if first run
-    // Actually, prompt says "Prompt user for API key on first use".
-    // We'll check if configuration is valid for selected provider.
-    if (aiSettings.provider === 'openai' && !aiSettings.openAiKey) {
+    // Pre-flight checks for keys
+    if (aiSettings.provider === 'gemini') {
+        if (window.aistudio) {
+            const hasKey = await window.aistudio.hasSelectedApiKey();
+            if (!hasKey) {
+                try {
+                    await window.aistudio.openSelectKey();
+                    // Update state to reflect selection
+                    setIsGeminiKeySelected(await window.aistudio.hasSelectedApiKey());
+                } catch (e) {
+                    return; // Cancelled
+                }
+            }
+        }
+    }
+    else if (aiSettings.provider === 'openai' && !aiSettings.openAiKey) {
         setShowAiSettings(true);
         return;
     }
-    if (aiSettings.provider === 'anthropic' && !aiSettings.anthropicKey) {
+    else if (aiSettings.provider === 'anthropic' && !aiSettings.anthropicKey) {
         setShowAiSettings(true);
         return;
     }
@@ -665,12 +686,30 @@ html_css_files = [
                       </div>
                       
                       {aiSettings.provider === 'gemini' && (
-                          <div className="p-3 bg-blue-900/20 border border-blue-900/50 rounded text-xs text-blue-200 flex items-start gap-2">
-                                <CheckCircle2 size={14} className="mt-0.5 shrink-0" />
-                                <div>
-                                    Using system-provided API key. <br/>
-                                    <span className="opacity-70">Requests are handled by the built-in Gemini environment.</span>
+                          <div className={`p-3 border rounded text-xs flex items-center justify-between gap-3 transition-colors ${isGeminiKeySelected ? 'bg-green-900/10 border-green-900/20 text-green-300' : 'bg-amber-900/10 border-amber-900/20 text-amber-300'}`}>
+                                <div className="flex items-start gap-3">
+                                      <CheckCircle2 size={16} className={`mt-0.5 shrink-0 ${isGeminiKeySelected ? 'text-green-500' : 'text-amber-500'}`} />
+                                      <div>
+                                          <strong className="block mb-0.5 font-medium">{isGeminiKeySelected ? 'API Key Active' : 'API Key Required'}</strong>
+                                          <span className="opacity-70 leading-relaxed block">
+                                              {isGeminiKeySelected 
+                                                  ? 'Using your selected Google AI Studio API key.' 
+                                                  : 'You must select a Google AI Studio API key to use Gemini.'}
+                                          </span>
+                                      </div>
                                 </div>
+                                {window.aistudio && (
+                                    <button 
+                                      onClick={async () => {
+                                          await window.aistudio!.openSelectKey();
+                                          const selected = await window.aistudio!.hasSelectedApiKey();
+                                          setIsGeminiKeySelected(selected);
+                                      }}
+                                      className="shrink-0 px-3 py-1.5 bg-slate-800 hover:bg-slate-700 border border-slate-600 hover:border-slate-500 text-slate-200 rounded text-xs font-semibold transition-all shadow-sm"
+                                    >
+                                      {isGeminiKeySelected ? 'Change Key' : 'Select Key'}
+                                    </button>
+                                )}
                           </div>
                       )}
 
