@@ -1,50 +1,27 @@
 import React, { useState, useEffect, useCallback, useRef } from 'react';
 import { 
-    FileCode, 
-    FileType as FileIcon, 
-    Play, 
-    Download, 
-    Wand2, 
-    Settings, 
-    LayoutTemplate,
-    RefreshCw,
     Smartphone,
     Tablet,
     Monitor,
     Eye,
     History,
-    Palette,
-    Menu,
-    ChevronLeft,
-    X,
     GripVertical,
-    CheckCircle2,
-    ScrollText,
-    GitFork,
-    RotateCcw,
-    Trash2,
-    Save
 } from 'lucide-react';
 import { pyodideService } from './services/pyodideService';
 import { generateThemeStyles } from './services/aiService';
 import { CodeEditor } from './components/CodeEditor';
 import { Preview } from './components/Preview';
-import { ThemeFiles, FileType, BuildStatus, DeviceMode, AiSettings, AiProvider } from './types';
+import { Sidebar } from './components/Sidebar';
+import { Toolbar } from './components/Toolbar';
+import { ThemeGalleryModal } from './components/modals/ThemeGalleryModal';
+import { AiSettingsModal } from './components/modals/AiSettingsModal';
+import { RestoreSessionModal } from './components/modals/RestoreSessionModal';
+import { LogsModal } from './components/modals/LogsModal';
+import { ThemeFiles, FileType, BuildStatus, DeviceMode, AiSettings } from './types';
 import { INITIAL_CSS, INITIAL_HTML, INITIAL_RST, INITIAL_CONF, THEME_GALLERY } from './constants';
 
 const STORAGE_KEY_FILES = 'sphinx_studio_files';
 const STORAGE_KEY_AI = 'sphinx_studio_ai';
-
-declare global {
-  interface AIStudio {
-    hasSelectedApiKey(): Promise<boolean>;
-    openSelectKey(): Promise<void>;
-  }
-
-  interface Window {
-    aistudio?: AIStudio;
-  }
-}
 
 function App() {
   // Application State
@@ -93,6 +70,15 @@ function App() {
 
   // Initialize Pyodide on mount and check storage
   useEffect(() => {
+    // Subscribe to logs immediately to catch initialization messages
+    const unsubscribeLogs = pyodideService.addLogListener((msg) => {
+        setLogs(prev => [...prev, msg]);
+        // If a fatal error occurs during init, we might want to ensure logs are visible
+        if (msg.includes('FATAL') || msg.includes('Error')) {
+             console.error("Log caught error:", msg);
+        }
+    });
+
     const init = async () => {
         try {
             await pyodideService.init();
@@ -124,12 +110,18 @@ function App() {
                 setAiSettings(JSON.parse(savedAi));
             }
 
-        } catch (e) {
+        } catch (e: any) {
             setStatus(BuildStatus.ERROR);
-            setError("Failed to load Python environment. Please refresh.");
+            setError(`Failed to load Python environment: ${e.message}`);
+            // Ensure logs modal is open if initialization fails so user sees why
+            setShowLogs(true);
         }
     };
     init();
+    
+    return () => {
+        unsubscribeLogs();
+    };
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, []);
 
@@ -177,7 +169,9 @@ function App() {
     
     setStatus(BuildStatus.BUILDING);
     setError(undefined);
-    setLogs([]);
+    setLogs([]); // Clear previous build logs, but we might want to keep init logs? 
+                 // For now, let's clear to keep it relevant to the current build.
+                 // Ideally, we'd distinguish init logs from build logs.
 
     try {
         const cssToBuild = forceCss || currentFiles.css;
@@ -353,161 +347,34 @@ html_css_files = [
   return (
     <div className="flex h-screen w-full bg-[#0f172a] text-slate-200 overflow-hidden font-sans">
       
-      {/* Sidebar */}
-      <div 
-        className={`
-            bg-[#1e293b] flex flex-col border-r border-slate-700 shadow-xl z-20 flex-shrink-0 transition-all duration-300 ease-in-out
-            ${sidebarOpen ? 'w-72 translate-x-0' : 'w-0 -translate-x-full opacity-0 overflow-hidden'}
-        `}
-      >
-        <div className="p-4 border-b border-slate-700 flex items-center justify-between min-w-[18rem]">
-            <div className="flex items-center gap-2">
-                <LayoutTemplate className="w-6 h-6 text-blue-400" />
-                <h1 className="font-bold text-lg tracking-tight">Sphinx Studio</h1>
-            </div>
-            <button onClick={() => setSidebarOpen(false)} className="text-slate-400 hover:text-white">
-                <ChevronLeft size={20} />
-            </button>
-        </div>
-
-        <nav className="flex-1 overflow-y-auto py-4 custom-scrollbar min-w-[18rem]">
-            <div className="px-4 mb-2 text-xs font-semibold text-slate-500 uppercase tracking-wider">
-                Source Files
-            </div>
-            <ul className="space-y-1 mb-6">
-                <FileTab 
-                    label="index.rst" 
-                    icon={<FileIcon size={16} />} 
-                    isActive={activeFile === 'rst'} 
-                    onClick={() => setActiveFile('rst')} 
-                />
-                 <FileTab 
-                    label="custom.css" 
-                    icon={<FileCode size={16} />} 
-                    isActive={activeFile === 'css'} 
-                    onClick={() => setActiveFile('css')} 
-                />
-                 <FileTab 
-                    label="conf.py" 
-                    icon={<Settings size={16} />} 
-                    isActive={activeFile === 'conf'} 
-                    onClick={() => setActiveFile('conf')} 
-                />
-                <FileTab 
-                    label="layout.html" 
-                    icon={<CodeIcon size={16} />} 
-                    isActive={activeFile === 'html'} 
-                    onClick={() => setActiveFile('html')} 
-                />
-            </ul>
-
-            <div className="px-4 mb-4">
-                 <button 
-                    onClick={() => setShowThemeGallery(true)}
-                    className="w-full flex items-center justify-between px-4 py-3 bg-slate-800 hover:bg-slate-700 border border-slate-700 rounded-lg text-sm text-slate-300 transition-colors group"
-                >
-                    <span className="flex items-center gap-2">
-                        <Palette size={16} className="text-blue-400" />
-                        Theme Gallery
-                    </span>
-                    <ChevronLeft size={16} className="rotate-180 opacity-50 group-hover:opacity-100 transition-opacity" />
-                </button>
-            </div>
-
-            <div className="px-4 mb-2 flex items-center justify-between">
-                 <span className="text-xs font-semibold text-slate-500 uppercase tracking-wider">AI Assistant</span>
-                 <button 
-                    onClick={() => setShowAiSettings(true)}
-                    className="text-slate-500 hover:text-blue-400 transition-colors"
-                    title="AI Settings"
-                 >
-                     <Settings size={12} />
-                 </button>
-            </div>
-            <div className="px-4">
-                <div className="bg-slate-800 p-3 rounded-lg border border-slate-700">
-                    <label className="text-xs text-slate-400 block mb-2">Describe style changes:</label>
-                    <textarea 
-                        className="w-full bg-slate-900 border border-slate-700 rounded p-2 text-xs text-slate-200 focus:border-blue-500 focus:outline-none resize-none mb-2"
-                        rows={3}
-                        placeholder="e.g. Make the sidebar headers darker and font larger..."
-                        value={aiPrompt}
-                        onChange={(e) => setAiPrompt(e.target.value)}
-                    />
-                    <button 
-                        onClick={handleAiGenerate}
-                        disabled={isAiGenerating || !aiPrompt}
-                        className="w-full bg-gradient-to-r from-blue-600 to-indigo-600 hover:from-blue-500 hover:to-indigo-500 text-white text-xs font-bold py-2 px-3 rounded flex items-center justify-center gap-2 disabled:opacity-50 disabled:cursor-not-allowed transition-all"
-                    >
-                        {isAiGenerating ? <RefreshCw className="animate-spin w-3 h-3"/> : <Wand2 className="w-3 h-3" />}
-                        Generate Style
-                    </button>
-                </div>
-            </div>
-        </nav>
-
-        <div className="p-4 border-t border-slate-700 min-w-[18rem]">
-            <button 
-                onClick={handleDownload}
-                className="w-full flex items-center justify-center gap-2 text-slate-400 hover:text-white text-sm py-2 transition-colors"
-            >
-                <Download size={16} />
-                Export Theme
-            </button>
-        </div>
-      </div>
+      <Sidebar 
+        isOpen={sidebarOpen}
+        setIsOpen={setSidebarOpen}
+        activeFile={activeFile}
+        setActiveFile={setActiveFile}
+        onOpenThemeGallery={() => setShowThemeGallery(true)}
+        onOpenAiSettings={() => setShowAiSettings(true)}
+        aiPrompt={aiPrompt}
+        setAiPrompt={setAiPrompt}
+        onAiGenerate={handleAiGenerate}
+        isAiGenerating={isAiGenerating}
+        onDownload={handleDownload}
+      />
 
       {/* Main Content */}
       <div className="flex-1 flex flex-col min-w-0">
         
-        {/* Toolbar */}
-        <header className="h-14 bg-[#0f172a] border-b border-slate-800 flex items-center justify-between px-4 flex-shrink-0">
-            <div className="flex items-center gap-4">
-                {!sidebarOpen && (
-                    <button 
-                        onClick={() => setSidebarOpen(true)}
-                        className="text-slate-400 hover:text-white p-1 rounded hover:bg-slate-800"
-                        title="Show Sidebar"
-                    >
-                        <Menu size={20} />
-                    </button>
-                )}
-                <span className="text-slate-400 text-sm hidden sm:inline truncate">
-                    Editing: <span className="text-blue-400 font-mono ml-1">{activeFile === 'rst' ? 'index.rst' : activeFile === 'css' ? 'custom.css' : activeFile === 'html' ? 'layout.html' : 'conf.py'}</span>
-                </span>
-                <span className="text-xs text-slate-500 italic">
-                    {hasSavedSession ? '• Changes saved locally' : ''}
-                </span>
-            </div>
-            <div className="flex items-center gap-3">
-                <button 
-                    onClick={() => setShowLogs(true)}
-                    className={`
-                        text-xs font-mono px-3 py-1.5 rounded border transition-colors flex items-center gap-2
-                        ${logs.length > 0 && error ? 'bg-red-900/30 border-red-800 text-red-400 hover:bg-red-900/50' : 'bg-slate-800 border-slate-700 text-slate-400 hover:text-white hover:border-slate-600'}
-                    `}
-                >
-                    <ScrollText size={14} />
-                    Logs
-                    {error && <span className="w-1.5 h-1.5 rounded-full bg-red-500 animate-pulse" />}
-                </button>
-                
-                <div className="w-px h-6 bg-slate-800 mx-1"></div>
-
-                <div className="text-xs text-slate-500 mr-2 flex items-center gap-1">
-                    <div className={`w-2 h-2 rounded-full ${status === BuildStatus.READY ? 'bg-green-500' : status === BuildStatus.ERROR ? 'bg-red-500' : 'bg-yellow-500 animate-pulse'}`} />
-                    {status === BuildStatus.READY ? 'Pyodide Ready' : status === BuildStatus.BUILDING ? 'Building...' : 'Loading Sphinx...'}
-                </div>
-                <button 
-                    onClick={onBuildClick}
-                    disabled={status !== BuildStatus.READY}
-                    className="bg-green-600 hover:bg-green-500 text-white text-sm font-semibold py-1.5 px-4 rounded-full flex items-center gap-2 shadow-lg shadow-green-900/20 disabled:opacity-50 disabled:cursor-not-allowed transition-all active:scale-95"
-                >
-                    <Play size={14} fill="currentColor" />
-                    Build
-                </button>
-            </div>
-        </header>
+        <Toolbar 
+            sidebarOpen={sidebarOpen}
+            setSidebarOpen={setSidebarOpen}
+            activeFile={activeFile}
+            hasSavedSession={hasSavedSession}
+            status={status}
+            error={error}
+            logsCount={logs.length}
+            onShowLogs={() => setShowLogs(true)}
+            onBuild={onBuildClick}
+        />
 
         {/* Split View Container */}
         <div ref={contentRef} className="flex-1 flex overflow-hidden relative">
@@ -610,235 +477,41 @@ html_css_files = [
         </div>
       </div>
 
-      {/* Theme Gallery Modal */}
       {showThemeGallery && (
-        <div className="fixed inset-0 z-50 flex items-center justify-center p-4 bg-black/60 backdrop-blur-sm animate-in fade-in duration-200">
-            <div className="bg-slate-900 border border-slate-700 rounded-xl shadow-2xl w-full max-w-4xl max-h-[85vh] flex flex-col overflow-hidden animate-in zoom-in-95 duration-200">
-                <div className="p-4 border-b border-slate-700 flex items-center justify-between bg-slate-900/50">
-                    <div className="flex items-center gap-2">
-                        <Palette className="text-blue-400" size={20} />
-                        <h2 className="text-xl font-bold text-white">Theme Gallery</h2>
-                    </div>
-                    <button 
-                        onClick={() => setShowThemeGallery(false)}
-                        className="text-slate-400 hover:text-white hover:bg-slate-800 p-1.5 rounded-full transition-colors"
-                    >
-                        <X size={20} />
-                    </button>
-                </div>
-                
-                <div className="p-6 overflow-y-auto grid grid-cols-1 md:grid-cols-2 lg:grid-cols-3 gap-4">
-                    {THEME_GALLERY.map(theme => (
-                        <button
-                            key={theme.id}
-                            onClick={() => loadTheme(theme.id)}
-                            className="group relative flex flex-col text-left bg-slate-800 border border-slate-700 hover:border-blue-500 rounded-lg p-4 transition-all hover:shadow-lg hover:shadow-blue-500/10"
-                        >
-                            <div className="mb-3 flex items-start justify-between w-full">
-                                <div className="p-2 bg-slate-900 rounded-md text-blue-400 group-hover:text-blue-300">
-                                    <LayoutTemplate size={24} />
-                                </div>
-                                {isThemeActive(theme.id) && (
-                                    <div className="flex items-center gap-1 text-green-400 text-[10px] font-bold uppercase tracking-wider bg-green-400/10 px-2 py-1 rounded-full">
-                                        <CheckCircle2 size={12} />
-                                        Active
-                                    </div>
-                                )}
-                            </div>
-                            <h3 className="font-bold text-slate-200 group-hover:text-white mb-1">{theme.name}</h3>
-                            <p className="text-xs text-slate-400 leading-relaxed mb-4 flex-1">
-                                {theme.description}
-                            </p>
-                            <div className="w-full py-2 bg-slate-900 rounded text-center text-xs font-semibold text-slate-400 group-hover:text-blue-400 group-hover:bg-blue-500/10 transition-colors flex items-center justify-center gap-2">
-                                <GitFork size={14} />
-                                Fork & Edit
-                            </div>
-                        </button>
-                    ))}
-                </div>
-            </div>
-        </div>
+        <ThemeGalleryModal 
+            onClose={() => setShowThemeGallery(false)}
+            themes={THEME_GALLERY}
+            loadTheme={loadTheme}
+            isThemeActive={isThemeActive}
+        />
       )}
 
-      {/* AI Settings Modal */}
       {showAiSettings && (
-          <div className="fixed inset-0 z-50 flex items-center justify-center p-4 bg-black/60 backdrop-blur-sm animate-in fade-in duration-200">
-              <div className="bg-slate-900 border border-slate-700 rounded-lg shadow-2xl w-full max-w-md overflow-hidden animate-in zoom-in-95 duration-200">
-                  <div className="p-4 border-b border-slate-700 flex justify-between items-center">
-                      <h3 className="text-lg font-bold text-white flex items-center gap-2">
-                          <Settings size={18} className="text-blue-400" />
-                          AI Settings
-                      </h3>
-                      <button onClick={() => setShowAiSettings(false)} className="text-slate-400 hover:text-white"><X size={18}/></button>
-                  </div>
-                  <div className="p-6 space-y-4">
-                      <div>
-                          <label className="block text-xs font-semibold text-slate-500 uppercase tracking-wider mb-2">Provider</label>
-                          <select 
-                              className="w-full bg-slate-800 border border-slate-700 rounded p-2 text-sm text-white focus:border-blue-500 outline-none"
-                              value={aiSettings.provider}
-                              onChange={(e) => setAiSettings(prev => ({ ...prev, provider: e.target.value as AiProvider }))}
-                          >
-                              <option value="gemini">Google Gemini</option>
-                              <option value="openai">OpenAI (GPT-4)</option>
-                              <option value="anthropic">Anthropic (Claude)</option>
-                          </select>
-                      </div>
-                      
-                      {aiSettings.provider === 'gemini' && (
-                          <div className={`p-3 border rounded text-xs flex items-center justify-between gap-3 transition-colors ${isGeminiKeySelected ? 'bg-green-900/10 border-green-900/20 text-green-300' : 'bg-amber-900/10 border-amber-900/20 text-amber-300'}`}>
-                                <div className="flex items-start gap-3">
-                                      <CheckCircle2 size={16} className={`mt-0.5 shrink-0 ${isGeminiKeySelected ? 'text-green-500' : 'text-amber-500'}`} />
-                                      <div>
-                                          <strong className="block mb-0.5 font-medium">{isGeminiKeySelected ? 'API Key Active' : 'API Key Required'}</strong>
-                                          <span className="opacity-70 leading-relaxed block">
-                                              {isGeminiKeySelected 
-                                                  ? 'Using your selected Google AI Studio API key.' 
-                                                  : 'You must select a Google AI Studio API key to use Gemini.'}
-                                          </span>
-                                      </div>
-                                </div>
-                                {window.aistudio && (
-                                    <button 
-                                      onClick={async () => {
-                                          await window.aistudio!.openSelectKey();
-                                          const selected = await window.aistudio!.hasSelectedApiKey();
-                                          setIsGeminiKeySelected(selected);
-                                      }}
-                                      className="shrink-0 px-3 py-1.5 bg-slate-800 hover:bg-slate-700 border border-slate-600 hover:border-slate-500 text-slate-200 rounded text-xs font-semibold transition-all shadow-sm"
-                                    >
-                                      {isGeminiKeySelected ? 'Change Key' : 'Select Key'}
-                                    </button>
-                                )}
-                          </div>
-                      )}
-
-                      {aiSettings.provider === 'openai' && (
-                          <div>
-                              <label className="block text-xs font-semibold text-slate-500 uppercase tracking-wider mb-2">OpenAI API Key</label>
-                              <input 
-                                  type="password" 
-                                  placeholder="sk-..." 
-                                  className="w-full bg-slate-800 border border-slate-700 rounded p-2 text-sm text-white focus:border-blue-500 outline-none"
-                                  value={aiSettings.openAiKey}
-                                  onChange={(e) => setAiSettings(prev => ({ ...prev, openAiKey: e.target.value }))}
-                              />
-                              <p className="text-[10px] text-slate-500 mt-1">Key is stored locally in your browser.</p>
-                          </div>
-                      )}
-
-                      {aiSettings.provider === 'anthropic' && (
-                          <div>
-                              <label className="block text-xs font-semibold text-slate-500 uppercase tracking-wider mb-2">Anthropic API Key</label>
-                              <input 
-                                  type="password" 
-                                  placeholder="sk-ant-..." 
-                                  className="w-full bg-slate-800 border border-slate-700 rounded p-2 text-sm text-white focus:border-blue-500 outline-none"
-                                  value={aiSettings.anthropicKey}
-                                  onChange={(e) => setAiSettings(prev => ({ ...prev, anthropicKey: e.target.value }))}
-                              />
-                              <p className="text-[10px] text-slate-500 mt-1">Key is stored locally in your browser. Requires CORS support.</p>
-                          </div>
-                      )}
-                  </div>
-                  <div className="p-4 border-t border-slate-700 flex justify-end">
-                      <button 
-                          onClick={() => setShowAiSettings(false)}
-                          className="bg-blue-600 hover:bg-blue-500 text-white px-4 py-2 rounded text-sm font-medium transition-colors"
-                      >
-                          Done
-                      </button>
-                  </div>
-              </div>
-          </div>
+          <AiSettingsModal 
+            onClose={() => setShowAiSettings(false)}
+            aiSettings={aiSettings}
+            setAiSettings={setAiSettings}
+            isGeminiKeySelected={isGeminiKeySelected}
+            setIsGeminiKeySelected={setIsGeminiKeySelected}
+          />
       )}
 
-      {/* Restore Session Modal */}
       {showRestoreModal && (
-          <div className="fixed inset-0 z-[60] flex items-center justify-center p-4 bg-black/80 backdrop-blur-md animate-in fade-in duration-300">
-              <div className="bg-slate-900 border border-slate-700 rounded-xl shadow-2xl w-full max-w-md p-6 text-center animate-in zoom-in-95 duration-200">
-                  <RotateCcw className="w-12 h-12 text-blue-500 mx-auto mb-4" />
-                  <h2 className="text-xl font-bold text-white mb-2">Restore Previous Session?</h2>
-                  <p className="text-slate-400 text-sm mb-6 leading-relaxed">
-                      We found unsaved changes from your last visit. Would you like to pick up where you left off?
-                  </p>
-                  <div className="grid grid-cols-2 gap-3">
-                      <button 
-                          onClick={discardSession}
-                          className="flex items-center justify-center gap-2 px-4 py-3 rounded-lg border border-slate-700 text-slate-300 hover:bg-slate-800 hover:text-white transition-colors"
-                      >
-                          <Trash2 size={16} />
-                          Discard
-                      </button>
-                      <button 
-                          onClick={restoreSession}
-                          className="flex items-center justify-center gap-2 px-4 py-3 rounded-lg bg-blue-600 text-white hover:bg-blue-500 font-medium transition-colors shadow-lg shadow-blue-900/20"
-                      >
-                          <RotateCcw size={16} />
-                          Restore
-                      </button>
-                  </div>
-              </div>
-          </div>
+          <RestoreSessionModal 
+            onDiscard={discardSession}
+            onRestore={restoreSession}
+          />
       )}
 
-      {/* Logs Modal */}
       {showLogs && (
-        <div className="fixed inset-0 z-50 flex items-center justify-center p-4 bg-black/60 backdrop-blur-sm animate-in fade-in duration-200">
-            <div className="bg-[#1e1e1e] border border-slate-700 rounded-xl shadow-2xl w-full max-w-3xl max-h-[80vh] flex flex-col overflow-hidden animate-in zoom-in-95 duration-200">
-                <div className="p-3 border-b border-slate-700 flex items-center justify-between bg-slate-800">
-                    <div className="flex items-center gap-2">
-                        <ScrollText className="text-slate-400" size={18} />
-                        <h2 className="text-sm font-bold text-slate-200 uppercase tracking-wider">Sphinx Build Logs</h2>
-                    </div>
-                    <button 
-                        onClick={() => setShowLogs(false)}
-                        className="text-slate-400 hover:text-white hover:bg-slate-700 p-1 rounded transition-colors"
-                    >
-                        <X size={18} />
-                    </button>
-                </div>
-                <div className="flex-1 overflow-auto p-4 bg-black font-mono text-xs leading-relaxed">
-                    {logs.length === 0 ? (
-                        <div className="text-slate-500 italic">No logs available.</div>
-                    ) : (
-                        logs.map((log, i) => (
-                            <div key={i} className={`${log.toLowerCase().includes('error') ? 'text-red-400' : log.toLowerCase().includes('warning') ? 'text-yellow-400' : 'text-slate-300'} border-b border-white/5 pb-1 mb-1 whitespace-pre-wrap break-all`}>
-                                {log}
-                            </div>
-                        ))
-                    )}
-                </div>
-            </div>
-        </div>
+        <LogsModal 
+            onClose={() => setShowLogs(false)}
+            logs={logs}
+        />
       )}
 
     </div>
   );
 }
-
-// Helper Component for Sidebar Tabs
-const FileTab = ({ label, icon, isActive, onClick }: { label: string, icon: React.ReactNode, isActive: boolean, onClick: () => void }) => (
-    <li 
-        onClick={onClick}
-        className={`
-            px-4 py-2 cursor-pointer flex items-center gap-3 text-sm transition-colors border-l-2
-            ${isActive 
-                ? 'bg-slate-800 text-blue-400 border-blue-500' 
-                : 'text-slate-400 border-transparent hover:bg-slate-800/50 hover:text-slate-200'}
-        `}
-    >
-        {icon}
-        <span className="font-medium">{label}</span>
-    </li>
-);
-
-// Helper for generic code icon
-const CodeIcon = ({ size }: { size: number }) => (
-    <svg width={size} height={size} viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round">
-        <polyline points="16 18 22 12 16 6"></polyline>
-        <polyline points="8 6 2 12 8 18"></polyline>
-    </svg>
-);
 
 export default App;
