@@ -1,5 +1,10 @@
 import { BuildResult } from '../types';
-import { PYTHON_BUILD_SCRIPT } from '../constants';
+import { 
+    PYTHON_BUILD_SCRIPT, 
+    PYODIDE_BASE_URL, 
+    PYODIDE_PACKAGES, 
+    ENV_CACHE_VERSION 
+} from '../constants';
 
 type LogCallback = (msg: string) => void;
 
@@ -8,10 +13,10 @@ type LogCallback = (msg: string) => void;
 // We use a Classic Worker with importScripts instead of a Module worker for simpler Blob usage.
 const WORKER_CODE = `
 // Import Pyodide (Classic Worker Style)
-importScripts("https://cdn.jsdelivr.net/pyodide/v0.27.2/full/pyodide.js");
+importScripts("${PYODIDE_BASE_URL}pyodide.js");
 
 let pyodide = null;
-const ENV_CACHE_VERSION = "v4-sphinx-env";
+const ENV_CACHE_VERSION = "${ENV_CACHE_VERSION}";
 let pythonBuildScript = "";
 
 self.onerror = function(event) {
@@ -34,6 +39,9 @@ self.onmessage = async (e) => {
         case 'BUILD':
             await handleBuild(id, payload);
             break;
+        case 'PARSE':
+            await handleParse(id, payload);
+            break;
     }
 };
 
@@ -52,7 +60,7 @@ async function handleInit() {
 
         // loadPyodide is available globally via importScripts
         pyodide = await loadPyodide({
-            indexURL: "https://cdn.jsdelivr.net/pyodide/v0.27.2/full/",
+            indexURL: "${PYODIDE_BASE_URL}",
             stdout: (text) => postLog("[Pyodide stdout] " + text),
             stderr: (text) => postLog("[Pyodide stderr] " + text),
         });
@@ -107,15 +115,7 @@ def save_environment(version):
             postLog("Worker: Environment loaded from cache.");
         } else {
             postLog("Worker: Installing dependencies (this may take a moment)...");
-            const packages = [
-                'beautifulsoup4',
-                'docutils',
-                'sphinx', 
-                'sphinx_rtd_theme', 
-                'sphinxcontrib-jquery',
-                'sphinx_book_theme',
-                'sphinx-documatt-theme'
-            ];
+            const packages = ${JSON.stringify(PYODIDE_PACKAGES)};
             await micropip.install(packages);
             
             postLog("Worker: Dependencies installed. Persisting to cache...");
@@ -184,12 +184,40 @@ async function handleBuild(id, payload) {
         });
     }
 }
+
+async function handleParse(id, payload) {
+    if (!pyodide) {
+        self.postMessage({ 
+             type: 'PARSE_RESULT', 
+             id, 
+             payload: {} 
+        });
+        return;
+    }
+    
+    try {
+        const { conf } = payload;
+        const parseFunc = pyodide.globals.get('parse_sphinx_conf');
+        const resultJson = parseFunc(conf);
+        const result = JSON.parse(resultJson);
+        
+        self.postMessage({
+            type: 'PARSE_RESULT',
+            id,
+            payload: result
+        });
+    } catch (error) {
+         // Silently fail or send empty object on parse error
+         self.postMessage({ type: 'PARSE_RESULT', id, payload: {} });
+    }
+}
 `;
 
 class PyodideService {
   private worker: Worker | null = null;
   private initPromise: Promise<void> | null = null;
   private buildCallbacks = new Map<string, (result: BuildResult) => void>();
+  private parseCallbacks = new Map<string, (result: any) => void>();
   private logListeners: Set<LogCallback> = new Set();
 
   addLogListener(callback: LogCallback) {
@@ -230,6 +258,12 @@ class PyodideService {
                     if (callback) {
                         callback(payload);
                         this.buildCallbacks.delete(id);
+                    }
+                } else if (type === 'PARSE_RESULT') {
+                    const callback = this.parseCallbacks.get(id);
+                    if (callback) {
+                        callback(payload);
+                        this.parseCallbacks.delete(id);
                     }
                 }
             };
@@ -274,6 +308,22 @@ class PyodideService {
             payload: { rst, htmlTemplate, css, conf }
         });
     });
+  }
+
+  async parseConf(conf: string): Promise<any> {
+      await this.init();
+      if (!this.worker) return {};
+      
+      return new Promise((resolve) => {
+          const id = Math.random().toString(36).substring(7);
+          this.parseCallbacks.set(id, resolve);
+          
+          this.worker!.postMessage({
+              type: 'PARSE',
+              id,
+              payload: { conf }
+          });
+      });
   }
 }
 

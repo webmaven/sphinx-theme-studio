@@ -1,5 +1,11 @@
-import React, { useRef, useState } from 'react';
+import React, { useRef, useState, useMemo, useEffect } from 'react';
 import { Palette, Type, AlignLeft, X } from 'lucide-react';
+import CodeMirror, { ReactCodeMirrorRef, Extension } from '@uiw/react-codemirror';
+import { python } from '@codemirror/lang-python';
+import { css } from '@codemirror/lang-css';
+import { html } from '@codemirror/lang-html';
+import { markdown } from '@codemirror/lang-markdown';
+import { vscodeDark } from '@uiw/codemirror-theme-vscode';
 import { AVAILABLE_FONTS } from '../constants';
 
 interface CodeEditorProps {
@@ -10,14 +16,12 @@ interface CodeEditorProps {
 }
 
 // Simple CSS formatter
-const formatCss = (css: string): string => {
+const formatCss = (cssText: string): string => {
   let formatted = '';
   let indentLevel = 0;
   const indent = '  ';
   
-  // Collapse whitespace but preserve some structure is hard without full parser
-  // Simple approach: cleanup lines and re-indent
-  const clean = css.replace(/\s+/g, ' ').replace(/\s*\{\s*/g, '{').replace(/\s*\}\s*/g, '}').replace(/\s*;\s*/g, ';').trim();
+  const clean = cssText.replace(/\s+/g, ' ').replace(/\s*\{\s*/g, '{').replace(/\s*\}\s*/g, '}').replace(/\s*;\s*/g, ';').trim();
   
   let i = 0;
   while(i < clean.length) {
@@ -33,62 +37,63 @@ const formatCss = (css: string): string => {
     }
     i++;
   }
-  // Cleanup artifacts
   return formatted.replace(/\n\s*\n/g, '\n').replace(/^\s+/gm, (match) => match).trim();
 };
 
 export const CodeEditor: React.FC<CodeEditorProps> = ({ code, onChange, language, readOnly = false }) => {
-  const textareaRef = useRef<HTMLTextAreaElement>(null);
+  const editorRef = useRef<ReactCodeMirrorRef>(null);
   const [activeTool, setActiveTool] = useState<'color' | 'font' | null>(null);
   const [pickerColor, setPickerColor] = useState('#000000');
 
+  // Map language string to CodeMirror extension
+  const extensions = useMemo(() => {
+    const exts: Extension[] = [];
+    switch(language) {
+      case 'python': exts.push(python()); break;
+      case 'css': exts.push(css()); break;
+      case 'html': exts.push(html()); break;
+      case 'markdown': exts.push(markdown()); break;
+      default: exts.push(markdown()); break;
+    }
+    return exts;
+  }, [language]);
+
   const insertText = (text: string) => {
-    const ta = textareaRef.current;
-    if (!ta) return;
+    const view = editorRef.current?.view;
+    if (!view) return;
     
-    const start = ta.selectionStart;
-    const end = ta.selectionEnd;
-    const val = ta.value;
-    
-    const newVal = val.substring(0, start) + text + val.substring(end);
-    onChange(newVal);
-    
-    // Defer cursor update to next tick
-    setTimeout(() => {
-        if (textareaRef.current) {
-            textareaRef.current.selectionStart = textareaRef.current.selectionEnd = start + text.length;
-            textareaRef.current.focus();
-        }
-    }, 0);
+    view.dispatch(view.state.replaceSelection(text));
+    view.focus();
   };
 
   const handleColorChange = (newColor: string) => {
-    const ta = textareaRef.current;
-    if (!ta) return;
+    const view = editorRef.current?.view;
+    if (!view) return;
 
-    const val = ta.value;
-    const cursor = ta.selectionStart;
-    const selectionEnd = ta.selectionEnd;
-
-    // 1. If user has explicitly selected text, standard replace behavior
-    if (cursor !== selectionEnd) {
-        insertText(newColor);
-        return;
+    const state = view.state;
+    const { from, to } = state.selection.main;
+    
+    // 1. Explicit selection
+    if (from !== to) {
+      view.dispatch(state.replaceSelection(newColor));
+      view.focus();
+      return;
     }
 
-    // 2. Intelligent Replace Logic
-    // We want to detect if the cursor is inside or adjacent to a color value and replace it.
+    // 2. Intelligent Replace
+    const doc = state.doc;
+    const line = doc.lineAt(from);
+    const lineText = line.text;
+    const cursor = from - line.from; // relative to line start
 
     // A. Hex Code Detection
-    // Look backwards from cursor for a '#'
     let start = -1;
     let end = -1;
     const lookbackLimit = Math.max(0, cursor - 10);
-    
+
     for (let i = cursor - 1; i >= lookbackLimit; i--) {
-        if (val[i] === '#') {
-            // Check if everything between # and cursor is valid hex char
-            const chunk = val.substring(i + 1, cursor);
+        if (lineText[i] === '#') {
+            const chunk = lineText.substring(i + 1, cursor);
             if (/^[0-9a-fA-F]*$/.test(chunk)) {
                 start = i;
             }
@@ -96,94 +101,81 @@ export const CodeEditor: React.FC<CodeEditorProps> = ({ code, onChange, language
         }
     }
 
-    // If we found a start '#', look forward for the end of the hex code
     if (start !== -1) {
         let i = cursor;
-        while (i < val.length && /[0-9a-fA-F]/.test(val[i])) {
+        while (i < lineText.length && /[0-9a-fA-F]/.test(lineText[i])) {
             i++;
         }
-        // Verify it looks like a hex code (length 3, 4, 6, 8 usually, but we be flexible for editing)
         end = i;
         
-        // Check if cursor was actually "inside" this token
         if (cursor >= start && cursor <= end) {
-            const newVal = val.substring(0, start) + newColor + val.substring(end);
-            onChange(newVal);
-            
-            // Move cursor to end of inserted color
-            setTimeout(() => {
-                if (textareaRef.current) {
-                    const newCursorPos = start + newColor.length;
-                    textareaRef.current.selectionStart = textareaRef.current.selectionEnd = newCursorPos;
-                    textareaRef.current.focus();
-                }
-            }, 0);
+            const absStart = line.from + start;
+            const absEnd = line.from + end;
+            view.dispatch({ changes: { from: absStart, to: absEnd, insert: newColor } });
+            view.focus();
             return;
         }
     }
 
-    // B. Function Detection (rgb, rgba, hsl, hsla)
-    // Look backwards for function start
-    const textBefore = val.substring(Math.max(0, cursor - 50), cursor);
+    // B. Function Detection (rgb/rgba/hsl/hsla)
+    const textBefore = lineText.substring(Math.max(0, cursor - 50), cursor);
     const fnMatch = textBefore.match(/(rgba?|hsla?)\([^)]*$/);
-    
-    if (fnMatch) {
-        const fnStart = Math.max(0, cursor - 50) + fnMatch.index!;
+
+    if (fnMatch && fnMatch.index !== undefined) {
+        const fnStartRelative = Math.max(0, cursor - 50) + fnMatch.index;
         
-        // Look forward for closing parenthesis
-        const textAfter = val.substring(cursor);
+        const textAfter = lineText.substring(cursor);
         const closeIndex = textAfter.indexOf(')');
         
         if (closeIndex !== -1) {
-            const fnEnd = cursor + closeIndex + 1;
-            const newVal = val.substring(0, fnStart) + newColor + val.substring(fnEnd);
-            onChange(newVal);
-            
-            setTimeout(() => {
-                if (textareaRef.current) {
-                    const newCursorPos = fnStart + newColor.length;
-                    textareaRef.current.selectionStart = textareaRef.current.selectionEnd = newCursorPos;
-                    textareaRef.current.focus();
-                }
-            }, 0);
-            return;
+             const absStart = line.from + fnStartRelative;
+             const absEnd = from + closeIndex + 1;
+             
+             view.dispatch({ changes: { from: absStart, to: absEnd, insert: newColor } });
+             view.focus();
+             return;
         }
     }
 
-    // C. Fallback: Just insert
+    // C. Fallback
     insertText(newColor);
   };
 
   const handleFormat = () => {
     if (language === 'css') {
-        onChange(formatCss(code));
+        const formatted = formatCss(code);
+        onChange(formatted);
     }
   };
 
   const toggleTool = (tool: 'color' | 'font') => {
       if (tool === 'color' && activeTool !== 'color') {
-          // Initialize picker color from cursor
-          const ta = textareaRef.current;
-          if (ta) {
-            const val = ta.value;
-            const cursor = ta.selectionStart;
-            let foundColor = '#000000';
-            
-            // Hex detection (simplified from handleColorChange)
-            for (let i = cursor - 1; i >= Math.max(0, cursor - 10); i--) {
-                if (val[i] === '#') {
-                     let end = i + 1;
-                     while (end < val.length && /[0-9a-fA-F]/.test(val[end])) end++;
-                     
-                     if (cursor >= i && cursor <= end) {
-                         const hex = val.substring(i, end);
-                         if (hex.length === 7) foundColor = hex;
-                         else if (hex.length === 4) foundColor = '#' + hex[1] + hex[1] + hex[2] + hex[2] + hex[3] + hex[3];
-                     }
-                     break; 
-                }
-            }
-            setPickerColor(foundColor);
+          // Attempt to pick up color under cursor
+          const view = editorRef.current?.view;
+          if (view) {
+              const state = view.state;
+              const { from } = state.selection.main;
+              const line = state.doc.lineAt(from);
+              const cursor = from - line.from;
+              const lineText = line.text;
+              
+              let foundColor = '#000000';
+              
+              // Hex logic (simplified from handleColorChange)
+              for (let i = cursor - 1; i >= Math.max(0, cursor - 10); i--) {
+                  if (lineText[i] === '#') {
+                      let end = i + 1;
+                      while (end < lineText.length && /[0-9a-fA-F]/.test(lineText[end])) end++;
+                      
+                      if (cursor >= i && cursor <= end) {
+                          const hex = lineText.substring(i, end);
+                          if (hex.length === 7) foundColor = hex;
+                          else if (hex.length === 4) foundColor = '#' + hex[1] + hex[1] + hex[2] + hex[2] + hex[3] + hex[3];
+                      }
+                      break; 
+                  }
+              }
+              setPickerColor(foundColor);
           }
       }
       setActiveTool(current => current === tool ? null : tool);
@@ -271,18 +263,41 @@ export const CodeEditor: React.FC<CodeEditorProps> = ({ code, onChange, language
         </div>
       )}
 
-      <div className="absolute top-0 right-0 px-2 py-1 text-xs text-slate-500 bg-slate-900 rounded-bl opacity-0 group-hover:opacity-100 transition-opacity pointer-events-none">
-        {language}
-      </div>
-      <textarea
-        ref={textareaRef}
-        className="flex-1 w-full h-full p-4 bg-[#1e293b] text-[#e2e8f0] resize-none focus:outline-none border-none leading-relaxed custom-scrollbar pt-12"
+      <CodeMirror
+        ref={editorRef}
         value={code}
-        onChange={(e) => onChange(e.target.value)}
-        onClick={() => setActiveTool(null)}
-        spellCheck={false}
+        height="100%"
+        theme={vscodeDark}
+        extensions={extensions}
+        onChange={onChange}
         readOnly={readOnly}
-        style={{ fontFamily: '"Fira Code", monospace' }}
+        basicSetup={{
+            lineNumbers: true,
+            highlightActiveLineGutter: true,
+            highlightSpecialChars: true,
+            history: true,
+            foldGutter: true,
+            drawSelection: true,
+            dropCursor: true,
+            allowMultipleSelections: true,
+            indentOnInput: true,
+            syntaxHighlighting: true,
+            bracketMatching: true,
+            closeBrackets: true,
+            autocompletion: true,
+            rectangularSelection: true,
+            crosshairCursor: true,
+            highlightActiveLine: true,
+            highlightSelectionMatches: true,
+            closeBracketsKeymap: true,
+            defaultKeymap: true,
+            searchKeymap: true,
+            historyKeymap: true,
+            foldKeymap: true,
+            completionKeymap: true,
+            lintKeymap: true,
+        }}
+        className="flex-1 overflow-hidden text-sm"
       />
     </div>
   );

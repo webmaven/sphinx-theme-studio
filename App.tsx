@@ -7,6 +7,7 @@ import {
     History,
     GripVertical,
 } from 'lucide-react';
+import DOMPurify from 'dompurify';
 import { pyodideService } from './services/pyodideService';
 import { generateThemeStyles } from './services/aiService';
 import { CodeEditor } from './components/CodeEditor';
@@ -15,10 +16,10 @@ import { Sidebar } from './components/Sidebar';
 import { Toolbar } from './components/Toolbar';
 import { ThemeGalleryModal } from './components/modals/ThemeGalleryModal';
 import { AiSettingsModal } from './components/modals/AiSettingsModal';
-import { RestoreSessionModal } from './components/modals/RestoreSessionModal';
 import { LogsModal } from './components/modals/LogsModal';
 import { ThemeFiles, FileType, BuildStatus, DeviceMode, AiSettings } from './types';
-import { INITIAL_CSS, INITIAL_HTML, INITIAL_RST, INITIAL_CONF, THEME_GALLERY } from './constants';
+import { INITIAL_CSS, INITIAL_HTML, INITIAL_RST, INITIAL_CONF } from './constants';
+import { THEME_GALLERY } from './data/themes';
 
 const STORAGE_KEY_FILES = 'sphinx_studio_files';
 const STORAGE_KEY_AI = 'sphinx_studio_ai';
@@ -64,9 +65,11 @@ function App() {
   });
   const [isGeminiKeySelected, setIsGeminiKeySelected] = useState(false);
 
-  // Session Restore State
+  // Session State
   const [hasSavedSession, setHasSavedSession] = useState(false);
-  const [showRestoreModal, setShowRestoreModal] = useState(false);
+
+  // Configuration State
+  const [parsedConf, setParsedConf] = useState<any>({});
 
   // Initialize Pyodide on mount and check storage
   useEffect(() => {
@@ -84,31 +87,33 @@ function App() {
             await pyodideService.init();
             setStatus(BuildStatus.READY);
             
-            // Check for saved session
+            // Check for saved session and restore automatically
             const saved = localStorage.getItem(STORAGE_KEY_FILES);
+            let filesToBuild = files;
+
             if (saved) {
                 try {
                     const parsed = JSON.parse(saved);
                     // Simple validation
                     if (parsed.css && parsed.conf) {
+                        console.log("Restoring saved session...");
+                        setFiles(parsed);
                         setHasSavedSession(true);
-                        setShowRestoreModal(true);
-                    } else {
-                        // Fallback to initial build if saved data is invalid
-                         handleBuild(files);
+                        filesToBuild = parsed;
                     }
                 } catch (e) {
-                     handleBuild(files);
+                     console.warn("Failed to restore saved session", e);
                 }
-            } else {
-                handleBuild(files);
             }
-
+            
             // Load AI Settings
             const savedAi = localStorage.getItem(STORAGE_KEY_AI);
             if (savedAi) {
                 setAiSettings(JSON.parse(savedAi));
             }
+
+            // Perform initial build
+            handleBuild(filesToBuild);
 
         } catch (e: any) {
             setStatus(BuildStatus.ERROR);
@@ -139,29 +144,62 @@ function App() {
     const timer = setTimeout(() => {
         localStorage.setItem(STORAGE_KEY_FILES, JSON.stringify(files));
         localStorage.setItem(STORAGE_KEY_AI, JSON.stringify(aiSettings));
+        setHasSavedSession(true);
     }, 1000);
     return () => clearTimeout(timer);
   }, [files, aiSettings]);
 
-  const restoreSession = () => {
-      const saved = localStorage.getItem(STORAGE_KEY_FILES);
-      if (saved) {
-          const parsed = JSON.parse(saved);
-          setFiles(parsed);
-          handleBuild(parsed);
-          setShowRestoreModal(false);
-      }
-  };
-
-  const discardSession = () => {
-      localStorage.removeItem(STORAGE_KEY_FILES);
-      setHasSavedSession(false);
-      setShowRestoreModal(false);
-      handleBuild(files); // Build default
-  };
+  // Real-time conf.py parsing with debounce
+  useEffect(() => {
+      const timer = setTimeout(async () => {
+          if (status === BuildStatus.READY) {
+              try {
+                  const conf = await pyodideService.parseConf(files.conf);
+                  setParsedConf(conf);
+              } catch (e) {
+                  // Silently ignore parse errors for now
+              }
+          }
+      }, 800);
+      return () => clearTimeout(timer);
+  }, [files.conf, status]);
 
   const handleFileChange = (content: string) => {
     setFiles(prev => ({ ...prev, [activeFile]: content }));
+  };
+
+  const sanitizeLayoutHtml = (htmlContent: string): string => {
+      // Aggressive sanitization for user-provided layout templates
+      // We allow standard layout tags but strictly forbid scripts and embedded objects
+      return DOMPurify.sanitize(htmlContent, {
+          USE_PROFILES: { html: true },
+          // Forbidden tags that execute code or load external non-image resources
+          FORBID_TAGS: [
+              'script', 
+              'iframe', 
+              'object', 
+              'embed', 
+              'form', 
+              'meta', 
+              'base', 
+              'applet', 
+              'link', 
+              'style' // Force users to use custom.css
+          ],
+          // Forbidden attributes that can execute JS
+          FORBID_ATTR: [
+              'style', 
+              'action', 
+              'formaction', 
+              'background', 
+              'dynsrc', 
+              'lowsrc'
+          ],
+          // Allow specific useful attributes
+          ADD_ATTR: ['target'],
+          // Ensure we don't strip the whole document structure if they paste a full page
+          WHOLE_DOCUMENT: false, 
+      });
   };
 
   const handleBuild = useCallback(async (currentFiles: ThemeFiles, forceCss?: string) => {
@@ -169,15 +207,16 @@ function App() {
     
     setStatus(BuildStatus.BUILDING);
     setError(undefined);
-    setLogs([]); // Clear previous build logs, but we might want to keep init logs? 
-                 // For now, let's clear to keep it relevant to the current build.
-                 // Ideally, we'd distinguish init logs from build logs.
+    setLogs([]); 
 
     try {
         const cssToBuild = forceCss || currentFiles.css;
+        // Sanitize the layout.html content before sending to build
+        const safeHtml = sanitizeLayoutHtml(currentFiles.html);
+
         const result = await pyodideService.buildDocs(
             currentFiles.rst, 
-            currentFiles.html, 
+            safeHtml, 
             cssToBuild,
             currentFiles.conf
         );
@@ -298,9 +337,9 @@ html_css_files = [
         'alabaster': 'alabaster',
         'documatt': 'sphinx_documatt_theme'
     };
-    const themeName = mapping[themeId] || themeId;
-    const regex = new RegExp(`html_theme\\s*=\\s*['"]${themeName}['"]`);
-    return regex.test(files.conf);
+    const expectedTheme = mapping[themeId] || themeId;
+    const currentTheme = parsedConf['html_theme'];
+    return currentTheme === expectedTheme;
   };
 
   const handleTakeSnapshot = () => {
@@ -493,13 +532,6 @@ html_css_files = [
             setAiSettings={setAiSettings}
             isGeminiKeySelected={isGeminiKeySelected}
             setIsGeminiKeySelected={setIsGeminiKeySelected}
-          />
-      )}
-
-      {showRestoreModal && (
-          <RestoreSessionModal 
-            onDiscard={discardSession}
-            onRestore={restoreSession}
           />
       )}
 

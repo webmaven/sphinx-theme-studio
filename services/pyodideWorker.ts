@@ -1,4 +1,10 @@
-import { PYTHON_BUILD_SCRIPT } from '../constants';
+import { 
+    PYTHON_BUILD_SCRIPT, 
+    PYODIDE_BASE_URL, 
+    PYODIDE_MJS_URL, 
+    PYODIDE_PACKAGES, 
+    ENV_CACHE_VERSION 
+} from '../constants';
 
 // Types to silence TS errors in worker context
 // Extending Worker interface to include onunhandledrejection which is missing in the standard Worker type but present in DedicatedWorkerGlobalScope
@@ -12,7 +18,6 @@ declare global {
 }
 
 let pyodide: any = null;
-const ENV_CACHE_VERSION = "v4-sphinx-env";
 
 // Global Error Handlers to catch loading/network issues
 self.onerror = function(event) {
@@ -55,14 +60,14 @@ async function handleInit() {
         let loadPyodide;
         try {
             // @ts-ignore
-            const pyodideModule = await import('https://cdn.jsdelivr.net/pyodide/v0.27.2/full/pyodide.mjs');
+            const pyodideModule = await import(`${PYODIDE_MJS_URL}`);
             loadPyodide = pyodideModule.loadPyodide;
         } catch (e: any) {
             throw new Error(`Failed to import Pyodide module: ${e.message}`);
         }
 
         pyodide = await loadPyodide({
-            indexURL: "https://cdn.jsdelivr.net/pyodide/v0.27.2/full/",
+            indexURL: PYODIDE_BASE_URL,
             stdout: (text: string) => postLog(`[Pyodide stdout] ${text}`),
             stderr: (text: string) => postLog(`[Pyodide stderr] ${text}`),
         });
@@ -118,15 +123,7 @@ def save_environment(version):
         } else {
             postLog("Worker: Installing dependencies (this may take a moment)...");
             // We install one by one or in small groups to see progress better in logs
-            const packages = [
-                'beautifulsoup4',
-                'docutils',
-                'sphinx', 
-                'sphinx_rtd_theme', 
-                'sphinxcontrib-jquery',
-                'sphinx_book_theme',
-                'sphinx-documatt-theme'
-            ];
+            const packages = PYODIDE_PACKAGES;
             await micropip.install(packages);
             
             postLog("Worker: Dependencies installed. Persisting to cache...");

@@ -5,7 +5,6 @@
     <meta name="viewport" content="width=device-width, initial-scale=1.0" />
     <title>Sphinx Theme Studio</title>
     <script src="https://cdn.tailwindcss.com"></script>
-    <script src="https://cdn.jsdelivr.net/pyodide/v0.27.2/full/pyodide.js"></script>
     <style>
       /* Custom scrollbar for webkit */
       ::-webkit-scrollbar {
@@ -26,6 +25,15 @@
         background-color: #0f172a; /* slate-950 */
         color: #e2e8f0; /* slate-200 */
       }
+      
+      /* CodeMirror Overrides for cleaner look */
+      .cm-editor {
+        height: 100%;
+        font-family: 'Fira Code', monospace;
+      }
+      .cm-scroller {
+        overflow: auto !important;
+      }
     </style>
   <script type="importmap">
 {
@@ -34,7 +42,14 @@
     "react": "https://esm.sh/react@^19.2.3",
     "@google/genai": "https://esm.sh/@google/genai@^1.38.0",
     "lucide-react": "https://esm.sh/lucide-react@^0.562.0",
-    "react-dom/": "https://esm.sh/react-dom@^19.2.3/"
+    "react-dom/": "https://esm.sh/react-dom@^19.2.3/",
+    "@uiw/react-codemirror": "https://esm.sh/@uiw/react-codemirror@4.23.6?external=react,react-dom",
+    "@codemirror/lang-python": "https://esm.sh/@codemirror/lang-python@6.1.4",
+    "@codemirror/lang-css": "https://esm.sh/@codemirror/lang-css@6.2.1",
+    "@codemirror/lang-html": "https://esm.sh/@codemirror/lang-html@6.4.8",
+    "@codemirror/lang-markdown": "https://esm.sh/@codemirror/lang-markdown@6.2.4",
+    "@uiw/codemirror-theme-vscode": "https://esm.sh/@uiw/codemirror-theme-vscode@4.23.6",
+    "dompurify": "https://esm.sh/dompurify@3.0.8"
   }
 }
 </script>
